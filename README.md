@@ -136,8 +136,27 @@ This will start the MCP server using stdio transport, exposing the following too
 ---
 
 ## Cursor Client (Agent Mode)
+> You do not need to run the MCP server for Cursor. As Cursor Agent will run it from the server resource provided in mcp.json
+
+See `src/mcp_template.json` for an example MCP server config:
+
+```json
+{
+    "mcpServers": {
+        "oci_api_gateway": { 
+            "command": "<absolute path to Python (preferably from .venv)>",
+            "args": [
+                "<absolute path to server.py>"
+            ]
+        }
+    }
+}
+```
+
+---
 
 In the Cursor editor, you can now interact with the MCP server using natural language queries.
+
 For example, to list all the gateways in a specific compartment, you can type:
 
 Example:
@@ -184,24 +203,6 @@ This will:
 
 ---
 
-## MCP Server Configuration Template
-
-See `src/mcp_template.json` for an example MCP server config:
-
-```json
-{
-    "mcpServers": {
-        "oci_api_gateway": { 
-            "command": "<absolute path to Python (preferably from .venv)>",
-            "args": [
-                "<absolute path to server.py>"
-            ]
-        }
-    }
-}
-```
-
----
 
 ## Development
 
