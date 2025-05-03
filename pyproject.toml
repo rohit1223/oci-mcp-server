@@ -1,0 +1,31 @@
+[project]
+name = "oci-mcp-server"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "llama-index==0.12.34",
+    "mcp==1.7.1",
+    "nest-asyncio==1.6.0",
+    "python-dotenv>=1.1.0",
+    "oci==2.150.3",
+    "llama-index-llms-ollama==0.5.4",
+    "ollama==0.4.8"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = [
+  "authentication",
+  "client_llama_react",
+  "client_stdio",
+  "config",
+  "gateway_services",
+  "main",
+  "server"
+]

@@ -1,0 +1,10 @@
+{
+    "mcpServers": {
+        "oci_api_gateway": { 
+            "command": "<path to Python>",
+            "args": [
+                "<path to server.py>"
+            ]
+        }
+    }
+  }

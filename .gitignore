@@ -1,0 +1,30 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# macOS system files
+.DS_Store
+
+# Compiled packages & build artifacts
+*.egg-info/
+*.egg
+dist/
+build/
+
+# `uv` lock file (optional: include if you want reproducible builds)
+# uv.lock
+
+# Editor/IDE metadata
+.vscode/
+.idea/
+*.swp
+
+# Log and temp files
+*.log
+*.tmp
