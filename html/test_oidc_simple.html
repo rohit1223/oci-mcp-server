@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OIDC API Gateway Test - Simple</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .info {
+            background-color: #e3f2fd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #2196F3;
+        }
+        .button-container {
+            text-align: center;
+            margin: 30px 0;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .note {
+            color: #666;
+            font-size: 14px;
+            text-align: center;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 OIDC Authentication Test</h1>
+        
+        <div class="info">
+            <strong>What this does:</strong><br>
+            This will send a POST request to your API Gateway endpoint, which will redirect you to Oracle Identity Cloud Service for authentication.
+        </div>
+        
+        <div class="button-container">
+            <button onclick="submitForm()">Start OIDC Authentication Flow</button>
+        </div>
+        
+        <div class="note">
+            After clicking, you'll be redirected to login. Once authenticated, you'll be redirected back.
+        </div>
+    </div>
+
+    <!-- Hidden form that will be submitted -->
+    <form id="oidcForm" action="https://irlxwomijighis2rzx3aj7n2c4.apigateway.us-ashburn-1.oci.oc-test.com/rdb/fallback-path" method="POST" style="display: none;">
+        <!-- Create a proper JSON payload as form data -->
+        <textarea name="json">{"jsonrpc":"2.0","method":"initialize","id":1,"params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}</textarea>
+    </form>
+
+    <script>
+        function submitForm() {
+            // Create a form dynamically with proper content
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = 'https://irlxwomijighis2rzx3aj7n2c4.apigateway.us-ashburn-1.oci.oc-test.com/rdb/fallback-path';
+            
+            // The API expects JSON in the body, but form submission sends form-encoded data
+            // We'll trigger the OIDC flow anyway
+            document.body.appendChild(form);
+            form.submit();
+        }
+    </script>
+</body>
+</html>

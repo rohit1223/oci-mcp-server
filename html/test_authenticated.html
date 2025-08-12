@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authenticated MCP Client</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 20px;
+            background-color: #f0f2f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1a73e8;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 10px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .authenticated {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .not-authenticated {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .button-group {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        button {
+            background-color: #1a73e8;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #1557b0;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .response-container {
+            margin-top: 20px;
+        }
+        .response-header {
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px 5px 0 0;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .response-body {
+            background-color: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 0 0 5px 5px;
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            white-space: pre;
+        }
+        .session-info {
+            background-color: #fff3cd;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            border: 1px solid #ffeaa7;
+        }
+        .error {
+            color: #ff6b6b;
+        }
+        .success {
+            color: #51cf66;
+        }
+        .info {
+            color: #339af0;
+        }
+        .timestamp {
+            color: #868e96;
+            font-size: 12px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        label {
+            display: block;
+            margin-top: 10px;
+            font-weight: bold;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 MCP Client - Authenticated Session</h1>
+        
+        <div id="authStatus" class="status not-authenticated">
+            Checking authentication status...
+        </div>
+        
+        <div id="sessionInfo" class="session-info" style="display: none;">
+            <strong>Session ID:</strong> <span id="sessionId">Not initialized</span><br>
+            <strong>Server URL:</strong> <span id="serverUrl">https://irlxwomijighis2rzx3aj7n2c4.apigateway.us-ashburn-1.oci.oc-test.com/rdb/r1</span>
+        </div>
+
+        <div class="button-group">
+            <button onclick="authenticate()">1. Authenticate with OIDC</button>
+            <button onclick="initialize()" id="initBtn" disabled>2. Initialize MCP Session</button>
+            <button onclick="listTools()" id="listBtn" disabled>3. List Tools</button>
+            <button onclick="callDummyTool()" id="callBtn" disabled>4. Call Dummy Gateway Tool</button>
+        </div>
+
+        <div>
+            <label for="compartmentId">Compartment ID (for list_gateways_tool):</label>
+            <input type="text" id="compartmentId" placeholder="ocid1.compartment.oc1..aaaaaaaai2zzsg..." value="">
+            <button onclick="callListGateways()" id="listGatewaysBtn" disabled>Call list_gateways_tool</button>
+        </div>
+
+        <div>
+            <label for="gatewayId">Gateway ID (for get_gateway_tool):</label>
+            <input type="text" id="gatewayId" placeholder="ocid1.apigateway..." value="">
+            <button onclick="callGetGateway()" id="getGatewayBtn" disabled>Call get_gateway_tool</button>
+        </div>
+
+        <div class="response-container">
+            <div class="response-header">
+                <span>Response</span>
+                <span class="timestamp" id="timestamp"></span>
+            </div>
+            <div class="response-body" id="response">Ready to connect...</div>
+        </div>
+    </div>
+
+    <script>
+        let SESSION_ID = null;
+        const API_URL = 'https://irlxwomijighis2rzx3aj7n2c4.apigateway.us-ashburn-1.oci.oc-test.com/rdb/r1';
+        
+        // Check if we have cookies (meaning we're authenticated)
+        window.onload = function() {
+            checkAuth();
+        };
+        
+        function checkAuth() {
+            // Try to make a simple request to check if we're authenticated
+            const authStatus = document.getElementById('authStatus');
+            
+            // Check if we came back from OIDC redirect
+            if (window.location.search.includes('code=') || document.cookie.includes('OCI_APIGW')) {
+                authStatus.className = 'status authenticated';
+                authStatus.textContent = '✅ Authenticated via OIDC (cookies set)';
+                document.getElementById('initBtn').disabled = false;
+            } else {
+                authStatus.className = 'status not-authenticated';
+                authStatus.textContent = '❌ Not authenticated - Click "Authenticate with OIDC" first';
+            }
+        }
+        
+        function authenticate() {
+            // Redirect to the API Gateway which will trigger OIDC flow
+            window.location.href = API_URL;
+        }
+        
+        async function makeRequest(method, params = null, id = null) {
+            const requestId = id || Date.now();
+            const requestData = {
+                jsonrpc: "2.0",
+                method: method,
+                id: requestId
+            };
+            
+            if (params) {
+                requestData.params = params;
+            }
+            
+            updateResponse(`Sending ${method} request...`, 'info');
+            
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'text/event-stream',
+                        ...(SESSION_ID ? {'mcp-session-id': SESSION_ID} : {})
+                    },
+                    body: JSON.stringify(requestData),
+                    credentials: 'include' // Important: include cookies
+                });
+                
+                const responseText = await response.text();
+                
+                // Parse SSE response
+                if (responseText.startsWith('event:')) {
+                    const lines = responseText.split('\n');
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const jsonData = JSON.parse(line.substring(6));
+                            
+                            // Extract session ID from headers if present
+                            const sessionHeader = response.headers.get('mcp-session-id');
+                            if (sessionHeader && !SESSION_ID) {
+                                SESSION_ID = sessionHeader;
+                                document.getElementById('sessionId').textContent = SESSION_ID;
+                                document.getElementById('sessionInfo').style.display = 'block';
+                            }
+                            
+                            return jsonData;
+                        }
+                    }
+                }
+                
+                // Try to parse as JSON
+                return JSON.parse(responseText);
+                
+            } catch (error) {
+                updateResponse(`Error: ${error.message}`, 'error');
+                throw error;
+            }
+        }
+        
+        async function initialize() {
+            try {
+                const result = await makeRequest('initialize', {
+                    protocolVersion: "2024-11-05",
+                    capabilities: {},
+                    clientInfo: {
+                        name: "browser-client",
+                        version: "1.0"
+                    }
+                });
+                
+                if (result.error) {
+                    updateResponse(`Initialize Error: ${JSON.stringify(result.error, null, 2)}`, 'error');
+                } else {
+                    updateResponse(`Initialize Success:\n${JSON.stringify(result.result, null, 2)}`, 'success');
+                    
+                    // Enable other buttons
+                    document.getElementById('listBtn').disabled = false;
+                    document.getElementById('callBtn').disabled = false;
+                    document.getElementById('listGatewaysBtn').disabled = false;
+                    document.getElementById('getGatewayBtn').disabled = false;
+                }
+            } catch (error) {
+                updateResponse(`Initialize failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function listTools() {
+            try {
+                const result = await makeRequest('tools/list');
+                
+                if (result.error) {
+                    updateResponse(`List Tools Error: ${JSON.stringify(result.error, null, 2)}`, 'error');
+                } else {
+                    updateResponse(`Available Tools:\n${JSON.stringify(result.result, null, 2)}`, 'success');
+                }
+            } catch (error) {
+                updateResponse(`List tools failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function callDummyTool() {
+            try {
+                const result = await makeRequest('tools/call', {
+                    name: "get_dummy_gateways_tool",
+                    arguments: {}
+                });
+                
+                if (result.error) {
+                    updateResponse(`Call Tool Error: ${JSON.stringify(result.error, null, 2)}`, 'error');
+                } else {
+                    updateResponse(`Dummy Tool Result:\n${JSON.stringify(result.result, null, 2)}`, 'success');
+                }
+            } catch (error) {
+                updateResponse(`Call tool failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function callListGateways() {
+            const compartmentId = document.getElementById('compartmentId').value;
+            if (!compartmentId) {
+                updateResponse('Please enter a compartment ID', 'error');
+                return;
+            }
+            
+            try {
+                const result = await makeRequest('tools/call', {
+                    name: "list_gateways_tool",
+                    arguments: {
+                        compartment_id: compartmentId
+                    }
+                });
+                
+                if (result.error) {
+                    updateResponse(`List Gateways Error: ${JSON.stringify(result.error, null, 2)}`, 'error');
+                } else {
+                    updateResponse(`List Gateways Result:\n${JSON.stringify(result.result, null, 2)}`, 'success');
+                }
+            } catch (error) {
+                updateResponse(`List gateways failed: ${error.message}`, 'error');
+            }
+        }
+        
+        async function callGetGateway() {
+            const gatewayId = document.getElementById('gatewayId').value;
+            if (!gatewayId) {
+                updateResponse('Please enter a gateway ID', 'error');
+                return;
+            }
+            
+            try {
+                const result = await makeRequest('tools/call', {
+                    name: "get_gateway_tool",
+                    arguments: {
+                        gateway_id: gatewayId
+                    }
+                });
+                
+                if (result.error) {
+                    updateResponse(`Get Gateway Error: ${JSON.stringify(result.error, null, 2)}`, 'error');
+                } else {
+                    updateResponse(`Get Gateway Result:\n${JSON.stringify(result.result, null, 2)}`, 'success');
+                }
+            } catch (error) {
+                updateResponse(`Get gateway failed: ${error.message}`, 'error');
+            }
+        }
+        
+        function updateResponse(message, type = '') {
+            const responseEl = document.getElementById('response');
+            const timestampEl = document.getElementById('timestamp');
+            
+            const now = new Date().toLocaleTimeString();
+            timestampEl.textContent = now;
+            
+            if (type === 'error') {
+                responseEl.innerHTML = `<span class="error">${message}</span>`;
+            } else if (type === 'success') {
+                responseEl.innerHTML = `<span class="success">${message}</span>`;
+            } else if (type === 'info') {
+                responseEl.innerHTML = `<span class="info">${message}</span>`;
+            } else {
+                responseEl.textContent = message;
+            }
+        }
+    </script>
+</body>
+</html>

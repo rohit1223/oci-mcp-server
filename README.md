@@ -204,11 +204,107 @@ This will:
 ---
 
 
+## Streamable HTTP Server
+
+The project includes a **fully functional** Streamable HTTP transport server that fixes the parameter validation issues found in the standard FastMCP implementation:
+
+### Running the Streamable HTTP Server
+
+```bash
+python src/streaming_server.py
+```
+
+This starts the server on `http://127.0.0.1:8000/mcp` with Server-Sent Events (SSE) support.
+
+### Key Features
+
+- ✅ **Fully Functional**: All MCP operations work correctly (unlike FastMCP's broken implementation)
+- ✅ **Fixed Parameter Validation**: Properly handles tools/list and tools/call requests
+- ✅ **Session Management**: Automatic session creation and tracking
+- ✅ **Error Recovery**: Graceful error handling and reporting
+- ✅ **Health Monitoring**: Built-in health check endpoint
+
+### Testing with curl
+
+The Streamable HTTP transport uses JSON-RPC over HTTP with SSE responses. Required headers:
+- `Content-Type: application/json`
+- `Accept: application/json, text/event-stream`
+
+#### Complete Working Flow
+
+```bash
+# 1. Initialize Session (creates session automatically)
+RESPONSE=$(curl -s -D - -X POST http://127.0.0.1:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "initialize",
+    "id": 1,
+    "params": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": {},
+      "clientInfo": {
+        "name": "curl-client",
+        "version": "1.0"
+      }
+    }
+  }')
+
+# Extract session ID
+SESSION_ID=$(echo "$RESPONSE" | grep -i "mcp-session-id:" | cut -d' ' -f2 | tr -d '\r')
+
+# 2. List Available Tools (NOW WORKS!)
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/list",
+    "id": 2
+  }'
+
+# 3. Call list_gateways_tool
+curl -X POST http://127.0.0.1:8000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -H "mcp-session-id: $SESSION_ID" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "id": 3,
+    "params": {
+      "name": "list_gateways_tool",
+      "arguments": {
+        "compartment_id": "ocid1.compartment.oc1..aaaaaaaaXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      }
+    }
+  }'
+
+# 4. Health Check
+curl -X GET http://127.0.0.1:8000/health
+```
+
+#### Automated Testing
+
+Use the provided test script for comprehensive validation:
+
+```bash
+./test_streaming.sh
+```
+
+This script tests initialization, tools listing, tool calls, and health checks.
+
+**Note:** Replace the redacted OCIDs with your actual compartment and gateway IDs for real testing.
+
+---
+
 ## Development
 
 - All source code is in the `src/` directory.
 - Dependencies are managed via `pyproject.toml`.
-- To add new tools, edit `src/server.py` and implement logic in `src/gateway_services.py`(for gateway resources).
+- To add new tools, edit `src/server.py` (or `src/streaming_server.py` for HTTP) and implement logic in `src/gateway_services.py`(for gateway resources).
 
 
 ---
@@ -216,5 +312,6 @@ This will:
 ## Troubleshooting
 
 - Ensure your OCI session files are present and valid.
-- Use Python 3.11 and the provided virtual environment.
+- Use Python 3.13.5 and the provided virtual environment.
 - For LlamaIndex/Ollama, ensure the Ollama server is running and accessible.
+- For Streamable HTTP, ensure the server is running on port 8000 and use the correct headers.
