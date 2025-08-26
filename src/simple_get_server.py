@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Streamable HTTP MCP Server - Simplified GET-only version
-Handles MCP protocol over HTTP GET with query parameters
+Simplified GET-based MCP Server following streaming_server.py structure
 """
 
 import json
@@ -46,19 +45,19 @@ class Session:
 # In-memory session store
 sessions: Dict[str, Session] = {}
 
-app = FastAPI(title="MCP Streamable HTTP Server")
+app = FastAPI(title="MCP GET Server")
 
-# Add CORS middleware for browser access
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
     expose_headers=["mcp-session-id"]
 )
 
-# Available tools
+# Available tools (same as streaming server)
 AVAILABLE_TOOLS = [
     Tool(
         name="list_gateways_tool",
@@ -99,9 +98,13 @@ AVAILABLE_TOOLS = [
     )
 ]
 
-def create_sse_response(data: dict) -> str:
-    """Create SSE formatted response"""
-    return f"event: message\ndata: {json.dumps(data)}\n\n"
+def create_success_response(request_id: Optional[Union[str, int]], result: dict) -> dict:
+    """Create JSON-RPC success response"""
+    return {
+        "jsonrpc": "2.0", 
+        "id": request_id,
+        "result": result
+    }
 
 def create_error_response(request_id: Optional[Union[str, int]], code: int, message: str) -> dict:
     """Create JSON-RPC error response"""
@@ -112,14 +115,6 @@ def create_error_response(request_id: Optional[Union[str, int]], code: int, mess
             "code": code,
             "message": message
         }
-    }
-
-def create_success_response(request_id: Optional[Union[str, int]], result: dict) -> dict:
-    """Create JSON-RPC success response"""
-    return {
-        "jsonrpc": "2.0", 
-        "id": request_id,
-        "result": result
     }
 
 async def handle_initialize(request: JSONRPCRequest, session: Session) -> dict:
@@ -173,7 +168,7 @@ async def handle_tools_call(request: JSONRPCRequest, session: Session) -> dict:
         return create_error_response(request.id, -32602, "Missing tool name")
     
     try:
-        # Call the actual tool functions
+        # Call the actual tool functions (same as streaming server)
         if tool_name == "list_gateways_tool":
             compartment_id = arguments.get("compartment_id")
             if not compartment_id:
@@ -235,18 +230,17 @@ async def handle_tools_call(request: JSONRPCRequest, session: Session) -> dict:
         }
         return create_success_response(request.id, error_result)
 
-@app.get("/r1")
-async def mcp_endpoint(
+@app.get("/mcp")
+async def mcp_get_endpoint(
     request: Request,
-    payload: Optional[str] = Query(None, description="JSON-RPC request as JSON string"),
-    jsonrpc: Optional[str] = Query(None, description="JSON-RPC version"),
+    jsonrpc: Optional[str] = Query("2.0", description="JSON-RPC version"),
     method: Optional[str] = Query(None, description="Method name"),
     id: Optional[Union[str, int]] = Query(None, description="Request ID"),
     params: Optional[str] = Query(None, description="Method parameters as JSON string")
 ):
-    """MCP endpoint - GET only with query parameters"""
+    """MCP GET endpoint - similar to streaming server but GET only"""
     try:
-        # Get or create session
+        # Get or create session (same pattern as streaming server)
         session_id = request.headers.get("mcp-session-id")
         if not session_id:
             session_id = str(uuid.uuid4())
@@ -259,49 +253,34 @@ async def mcp_endpoint(
                 sessions[session_id] = session
         
         # Parse JSON-RPC request from query parameters
-        try:
-            if payload:
-                # Use the full payload if provided
-                json_data = json.loads(payload)
-            else:
-                # Build from individual parameters
-                if not jsonrpc or not method:
-                    raise ValueError("Missing required parameters: jsonrpc and method")
-                
-                json_data = {
-                    "jsonrpc": jsonrpc,
-                    "method": method
-                }
-                
-                if id is not None:
-                    try:
-                        json_data["id"] = int(id)
-                    except (ValueError, TypeError):
-                        json_data["id"] = id
-                
-                if params:
-                    json_data["params"] = json.loads(params)
-                else:
-                    json_data["params"] = None
-            
-            rpc_request = JSONRPCRequest(**json_data)
-            
-        except Exception as e:
-            logger.error(f"Invalid JSON-RPC request: {e}")
-            error_resp = create_error_response(None, -32700, "Parse error")
+        if not method:
             return StreamingResponse(
-                iter([create_sse_response(error_resp)]),
-                media_type="text/event-stream",
-                headers={
-                    "mcp-session-id": session_id,
-                    "Cache-Control": "no-cache",
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
-                    "Access-Control-Expose-Headers": "mcp-session-id"
-                }
+                iter([json.dumps(create_error_response(None, -32600, "Missing method"))]),
+                media_type="application/json",
+                headers={"mcp-session-id": session_id}
             )
         
-        # Route to appropriate handler
+        # Parse parameters
+        parsed_params = None
+        if params:
+            try:
+                parsed_params = json.loads(params)
+            except:
+                return StreamingResponse(
+                    iter([json.dumps(create_error_response(id, -32700, "Parse error"))]),
+                    media_type="application/json",
+                    headers={"mcp-session-id": session_id}
+                )
+        
+        # Create request object
+        rpc_request = JSONRPCRequest(
+            jsonrpc=jsonrpc,
+            method=method,
+            id=id,
+            params=parsed_params
+        )
+        
+        # Route to appropriate handler (same as streaming server)
         if rpc_request.method == "initialize":
             response_data = await handle_initialize(rpc_request, session)
         elif rpc_request.method == "tools/list":
@@ -311,16 +290,13 @@ async def mcp_endpoint(
         else:
             response_data = create_error_response(rpc_request.id, -32601, f"Method not found: {rpc_request.method}")
         
-        # Return SSE response
-        sse_content = create_sse_response(response_data)
+        # Return JSON response (simplified from SSE)
         return StreamingResponse(
-            iter([sse_content]),
-            media_type="text/event-stream",
+            iter([json.dumps(response_data)]),
+            media_type="application/json",
             headers={
                 "mcp-session-id": session_id,
-                "Cache-Control": "no-cache",
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
                 "Access-Control-Expose-Headers": "mcp-session-id"
             }
         )
@@ -329,70 +305,9 @@ async def mcp_endpoint(
         logger.error(f"Server error: {e}")
         error_resp = create_error_response(None, -32603, "Internal error")
         return StreamingResponse(
-            iter([create_sse_response(error_resp)]),
-            media_type="text/event-stream"
+            iter([json.dumps(error_resp)]),
+            media_type="application/json"
         )
-
-@app.options("/r1")
-async def r1_options():
-    """Handle CORS preflight for /r1 endpoint"""
-    return Response(
-        content="",
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
-            "Access-Control-Max-Age": "3600"
-        }
-    )
-
-@app.get("/mcp")
-async def mcp_endpoint_alt(
-    request: Request,
-    payload: Optional[str] = Query(None, description="JSON-RPC request as JSON string"),
-    jsonrpc: Optional[str] = Query(None, description="JSON-RPC version"),
-    method: Optional[str] = Query(None, description="Method name"),
-    id: Optional[Union[str, int]] = Query(None, description="Request ID"),
-    params: Optional[str] = Query(None, description="Method parameters as JSON string")
-):
-    """MCP endpoint - Alternative path for API Gateway"""
-    # Handle double-encoded query parameters from API Gateway
-    query_str = str(request.url.query)
-    
-    # Check if we have a double-encoded query string (starts with ?jsonrpc)
-    if query_str.startswith("%3Fjsonrpc") or query_str.startswith("?jsonrpc"):
-        # Parse the double-encoded query string
-        from urllib.parse import unquote, parse_qs
-        
-        # Decode the query string
-        if query_str.startswith("%3F"):
-            query_str = unquote(query_str)
-        
-        # Remove leading ? if present
-        if query_str.startswith("?"):
-            query_str = query_str[1:]
-            
-        # Parse the actual parameters
-        parsed = parse_qs(query_str)
-        
-        # Extract parameters
-        jsonrpc = parsed.get('jsonrpc', [None])[0]
-        method = parsed.get('method', [None])[0]
-        id_val = parsed.get('id', [None])[0]
-        params_str = parsed.get('params', [None])[0]
-        
-        # Convert id to int if possible
-        if id_val is not None:
-            try:
-                id = int(id_val)
-            except (ValueError, TypeError):
-                id = id_val
-        else:
-            id = None
-            
-        params = params_str
-    
-    return await mcp_endpoint(request, payload, jsonrpc, method, id, params)
 
 @app.options("/mcp")
 async def mcp_options():
@@ -413,9 +328,7 @@ async def health_check():
     return {"status": "healthy", "sessions": len(sessions)}
 
 if __name__ == "__main__":
-    print("Starting Simplified MCP Server on http://0.0.0.0:8000", file=sys.stderr)
-    print("MCP endpoints:", file=sys.stderr)
-    print("  - http://0.0.0.0:8000/r1", file=sys.stderr)
-    print("  - http://0.0.0.0:8000/mcp", file=sys.stderr)
+    print("Starting MCP GET Server on http://0.0.0.0:8000", file=sys.stderr)
+    print("MCP endpoint: http://0.0.0.0:8000/mcp", file=sys.stderr) 
     print("Health check: http://0.0.0.0:8000/health", file=sys.stderr)
     uvicorn.run(app, host="0.0.0.0", port=8000)

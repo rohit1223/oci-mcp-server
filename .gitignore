@@ -28,3 +28,5 @@ build/
 # Log and temp files
 *.log
 *.tmp
+
+CLAUDE.md
