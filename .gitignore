@@ -29,4 +29,7 @@ build/
 *.log
 *.tmp
 
+# OAuth Configuration (contains secrets)
+src/oauth_config.py
+
 CLAUDE.md

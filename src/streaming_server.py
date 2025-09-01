@@ -8,11 +8,17 @@ import json
 import logging
 import sys
 import uuid
+import secrets
+import hashlib
+import base64
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlencode, parse_qs, unquote
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import StreamingResponse, Response
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Query, Response as FastAPIResponse, Cookie
+from fastapi.responses import StreamingResponse, Response, RedirectResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -21,6 +27,23 @@ from gateway_services import list_gateways, get_gateway, get_dumy_gateways_json
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Import OAuth Configuration
+try:
+    from oauth_config import OAUTH_CONFIG
+    logger.info("OAuth configuration loaded from oauth_config.py")
+except ImportError:
+    logger.warning("oauth_config.py not found. Copy oauth_config_template.py to oauth_config.py and configure it.")
+    # Fallback to empty config - server will fail on OAuth endpoints
+    OAUTH_CONFIG = {
+        "client_id": "",
+        "client_secret": "",
+        "authorization_endpoint": "",
+        "token_endpoint": "",
+        "redirect_uri": "",
+        "scope": "",
+        "audience": ""
+    }
 
 # JSON-RPC Models
 class JSONRPCRequest(BaseModel):
@@ -35,18 +58,31 @@ class Tool(BaseModel):
     description: str
     inputSchema: Dict[str, Any]
 
-# Session Management
-class Session:
+# Enhanced Session Management with OAuth
+class AuthSession:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.access_token = None
+        self.refresh_token = None
+        self.token_expiry = None
+        self.authenticated = False
+        self.state = None  # For CSRF protection
+        self.code_verifier = None  # For PKCE
+        self.created_at = datetime.utcnow()
+        self.last_accessed = datetime.utcnow()
+
+class MCPSession:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.initialized = False
         self.capabilities = {}
         self.client_info = {}
 
-# In-memory session store
-sessions: Dict[str, Session] = {}
+# In-memory session stores
+auth_sessions: Dict[str, AuthSession] = {}  # Keyed by session cookie
+mcp_sessions: Dict[str, MCPSession] = {}    # Keyed by MCP session ID
 
-app = FastAPI(title="MCP Streamable HTTP Server")
+app = FastAPI(title="MCP Streamable HTTP Server with OAuth")
 
 # Add CORS middleware for browser access
 app.add_middleware(
@@ -57,6 +93,69 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["mcp-session-id"]
 )
+
+# OAuth Helper Functions
+def generate_pkce_pair() -> tuple[str, str]:
+    """Generate PKCE code verifier and challenge"""
+    code_verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode('utf-8').rstrip('=')
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode('utf-8')).digest()
+    ).decode('utf-8').rstrip('=')
+    return code_verifier, code_challenge
+
+def generate_state() -> str:
+    """Generate CSRF protection state"""
+    return secrets.token_urlsafe(32)
+
+def create_auth_session() -> AuthSession:
+    """Create a new authentication session"""
+    session_id = secrets.token_urlsafe(32)
+    session = AuthSession(session_id)
+    auth_sessions[session_id] = session
+    return session
+
+def get_auth_session(session_id: str) -> Optional[AuthSession]:
+    """Get an authentication session by ID"""
+    session = auth_sessions.get(session_id)
+    if session:
+        session.last_accessed = datetime.utcnow()
+        # Clean up old sessions (>1 hour idle)
+        now = datetime.utcnow()
+        expired = [sid for sid, s in auth_sessions.items() 
+                  if (now - s.last_accessed).total_seconds() > 3600]
+        for sid in expired:
+            if sid != session_id:
+                del auth_sessions[sid]
+    return session
+
+def validate_auth(request: Request) -> Optional[AuthSession]:
+    """Validate authentication from request cookies or Authorization header"""
+    
+    # First check if there's a Bearer token in Authorization header
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        # If API Gateway validated the token, we trust it
+        # Create a temporary session for this request
+        temp_session = AuthSession("bearer-validated")
+        temp_session.authenticated = True
+        temp_session.access_token = auth_header.replace("Bearer ", "")
+        return temp_session
+    
+    # Otherwise check cookies
+    session_id = request.cookies.get("mcp_auth_session")
+    if not session_id:
+        return None
+    
+    session = get_auth_session(session_id)
+    if not session or not session.authenticated:
+        return None
+    
+    # Check token expiry
+    if session.token_expiry and datetime.utcnow() >= session.token_expiry:
+        session.authenticated = False
+        return None
+    
+    return session
 
 # Available tools
 AVAILABLE_TOOLS = [
@@ -122,7 +221,7 @@ def create_success_response(request_id: Optional[Union[str, int]], result: dict)
         "result": result
     }
 
-async def handle_initialize(request: JSONRPCRequest, session: Session) -> dict:
+async def handle_initialize(request: JSONRPCRequest, session: MCPSession) -> dict:
     """Handle initialize method"""
     if not request.params:
         return create_error_response(request.id, -32602, "Missing parameters")
@@ -148,7 +247,7 @@ async def handle_initialize(request: JSONRPCRequest, session: Session) -> dict:
     
     return create_success_response(request.id, result)
 
-async def handle_tools_list(request: JSONRPCRequest, session: Session) -> dict:
+async def handle_tools_list(request: JSONRPCRequest, session: MCPSession) -> dict:
     """Handle tools/list method"""
     if not session.initialized:
         return create_error_response(request.id, -32600, "Session not initialized")
@@ -158,7 +257,7 @@ async def handle_tools_list(request: JSONRPCRequest, session: Session) -> dict:
     
     return create_success_response(request.id, result)
 
-async def handle_tools_call(request: JSONRPCRequest, session: Session) -> dict:
+async def handle_tools_call(request: JSONRPCRequest, session: MCPSession) -> dict:
     """Handle tools/call method"""
     if not session.initialized:
         return create_error_response(request.id, -32600, "Session not initialized")
@@ -246,17 +345,29 @@ async def mcp_endpoint(
 ):
     """MCP endpoint - GET only with query parameters"""
     try:
-        # Get or create session
-        session_id = request.headers.get("mcp-session-id")
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            session = Session(session_id)
-            sessions[session_id] = session
+        # Check authentication for protected endpoints
+        auth_session = validate_auth(request)
+        if not auth_session:
+            return JSONResponse(
+                content={"error": "Authentication required", "auth_url": "/auth/start"},
+                status_code=401,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # Get or create MCP session
+        mcp_session_id = request.headers.get("mcp-session-id")
+        if not mcp_session_id:
+            mcp_session_id = str(uuid.uuid4())
+            session = MCPSession(mcp_session_id)
+            mcp_sessions[mcp_session_id] = session
         else:
-            session = sessions.get(session_id)
+            session = mcp_sessions.get(mcp_session_id)
             if not session:
-                session = Session(session_id)
-                sessions[session_id] = session
+                session = MCPSession(mcp_session_id)
+                mcp_sessions[mcp_session_id] = session
         
         # Parse JSON-RPC request from query parameters
         try:
@@ -293,7 +404,7 @@ async def mcp_endpoint(
                 iter([create_sse_response(error_resp)]),
                 media_type="text/event-stream",
                 headers={
-                    "mcp-session-id": session_id,
+                    "mcp-session-id": mcp_session_id,
                     "Cache-Control": "no-cache",
                     "Access-Control-Allow-Origin": "*",
                     "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
@@ -317,7 +428,7 @@ async def mcp_endpoint(
             iter([sse_content]),
             media_type="text/event-stream",
             headers={
-                "mcp-session-id": session_id,
+                "mcp-session-id": mcp_session_id,
                 "Cache-Control": "no-cache",
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
@@ -361,9 +472,6 @@ async def mcp_endpoint_alt(
     
     # Check if we have a double-encoded query string (starts with ?jsonrpc)
     if query_str.startswith("%3Fjsonrpc") or query_str.startswith("?jsonrpc"):
-        # Parse the double-encoded query string
-        from urllib.parse import unquote, parse_qs
-        
         # Decode the query string
         if query_str.startswith("%3F"):
             query_str = unquote(query_str)
@@ -407,15 +515,276 @@ async def mcp_options():
         }
     )
 
+@app.get("/auth/start")
+async def auth_start(response: FastAPIResponse):
+    """Start OAuth authentication flow"""
+    
+    try:
+        # Create new auth session
+        session = create_auth_session()
+        
+        # Generate PKCE parameters
+        code_verifier, code_challenge = generate_pkce_pair()
+        session.code_verifier = code_verifier
+        
+        # Generate state for CSRF protection
+        state = generate_state()
+        session.state = state
+        
+        # Build authorization URL
+        auth_params = {
+            "response_type": "code",
+            "client_id": OAUTH_CONFIG["client_id"],
+            "redirect_uri": OAUTH_CONFIG["redirect_uri"],
+            "scope": OAUTH_CONFIG["scope"],
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256"
+        }
+        
+        # Log the parameters for debugging
+        logger.info(f"OAuth params: client_id={OAUTH_CONFIG['client_id']}")
+        logger.info(f"OAuth params: redirect_uri={OAUTH_CONFIG['redirect_uri']}")
+        logger.info(f"OAuth params: scope={OAUTH_CONFIG['scope']}")
+        
+        auth_url = f"{OAUTH_CONFIG['authorization_endpoint']}?{urlencode(auth_params)}"
+        
+        logger.info(f"Full auth URL: {auth_url}")
+        
+        # Set session cookie
+        response = RedirectResponse(url=auth_url, status_code=302)
+        response.set_cookie(
+            key="mcp_auth_session",
+            value=session.session_id,
+            httponly=True,
+            secure=True,  # Required for HTTPS
+            samesite="none",  # Allow cross-site cookies for OAuth flow
+            max_age=3600,
+            path="/"  # Ensure cookie is available for all paths
+        )
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error starting auth flow: {e}")
+        raise HTTPException(status_code=500, detail="Failed to start authentication")
+
+@app.get("/auth/callback")
+async def auth_callback(
+    code: str = Query(..., description="Authorization code"),
+    state: str = Query(..., description="State parameter"),
+    session_id: str = Cookie(None, alias="mcp_auth_session")
+):
+    """Handle OAuth callback and exchange code for token"""
+    try:
+        # Validate session
+        if not session_id:
+            raise HTTPException(status_code=400, detail="No session found")
+        
+        session = get_auth_session(session_id)
+        if not session:
+            raise HTTPException(status_code=400, detail="Invalid session")
+        
+        # Validate state (CSRF protection)
+        logger.info(f"Session state: {session.state}")
+        logger.info(f"Received state: {state}")
+        
+        # IDCS might append additional data to state with semicolon
+        received_state = state.split(';')[0] if ';' in state else state
+        
+        if session.state != received_state:
+            logger.error(f"State mismatch: expected {session.state}, got {received_state}")
+            raise HTTPException(status_code=400, detail=f"Invalid state parameter: expected {session.state}, got {received_state}")
+        
+        # Exchange authorization code for token
+        async with httpx.AsyncClient() as client:
+            # Prepare Basic Auth for client credentials
+            import base64
+            client_creds = f"{OAUTH_CONFIG['client_id']}:{OAUTH_CONFIG['client_secret']}"
+            client_creds_b64 = base64.b64encode(client_creds.encode()).decode()
+            
+            token_data = {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": OAUTH_CONFIG["redirect_uri"],
+                "code_verifier": session.code_verifier
+                # IDCS ignores audience for authorization_code grant
+            }
+            
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {client_creds_b64}"
+            }
+            
+            logger.info(f"Exchanging code for token at: {OAUTH_CONFIG['token_endpoint']}")
+            
+            token_response = await client.post(
+                OAUTH_CONFIG["token_endpoint"],
+                data=token_data,
+                headers=headers
+            )
+            
+            if token_response.status_code != 200:
+                logger.error(f"Token exchange failed: {token_response.text}")
+                raise HTTPException(status_code=400, detail="Token exchange failed")
+            
+            token_info = token_response.json()
+            
+            # Store tokens in session
+            session.access_token = token_info.get("access_token")
+            session.refresh_token = token_info.get("refresh_token")
+            expires_in = token_info.get("expires_in", 3600)
+            session.token_expiry = datetime.utcnow() + timedelta(seconds=expires_in)
+            session.authenticated = True
+            
+            # Clear PKCE and state
+            session.code_verifier = None
+            session.state = None
+            
+            # Return success HTML directly with token info
+            return HTMLResponse(content=f"""
+                <html>
+                    <head><title>Authentication Successful</title></head>
+                    <body style="font-family: sans-serif; padding: 50px; max-width: 800px; margin: 0 auto;">
+                        <h1>✅ Authentication Successful!</h1>
+                        <p>You have been successfully authenticated.</p>
+                        
+                        <div style="background: #f0f0f0; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                            <h3>Your Access Token:</h3>
+                            <textarea readonly style="width: 100%; height: 100px; font-family: monospace; font-size: 12px;">{session.access_token}</textarea>
+                            <p><small>This token expires at: {session.token_expiry.isoformat() if session.token_expiry else 'Unknown'}</small></p>
+                        </div>
+                        
+                        <div style="background: #e8f4f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                            <h3>How to use the token:</h3>
+                            <p>Include this token in the Authorization header when calling protected endpoints:</p>
+                            <code style="background: white; padding: 10px; display: block; border-radius: 3px;">
+                                Authorization: Bearer YOUR_TOKEN_HERE
+                            </code>
+                        </div>
+                        
+                        <div style="margin-top: 30px;">
+                            <a href="/mcp_no_auth/auth/status" style="display: inline-block; margin: 10px; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px;">Check Auth Status</a>
+                            <br>
+                            <p>To access protected MCP endpoints, use the token above in your API calls.</p>
+                        </div>
+                    </body>
+                </html>
+            """)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in auth callback: {e}")
+        raise HTTPException(status_code=500, detail="Authentication failed")
+
+@app.get("/auth/success")
+async def auth_success(session_id: str = Cookie(None, alias="mcp_auth_session")):
+    """Success page after authentication"""
+    session = get_auth_session(session_id) if session_id else None
+    if not session or not session.authenticated:
+        return JSONResponse(
+            content={"authenticated": False, "message": "Not authenticated"},
+            status_code=401
+        )
+    
+    return JSONResponse(
+        content={
+            "authenticated": True,
+            "message": "Successfully authenticated",
+            "expires_at": session.token_expiry.isoformat() if session.token_expiry else None
+        }
+    )
+
+@app.get("/auth/status")
+async def auth_status(session_id: str = Cookie(None, alias="mcp_auth_session")):
+    """Check authentication status"""
+    session = get_auth_session(session_id) if session_id else None
+    
+    if not session:
+        return JSONResponse(
+            content={"authenticated": False, "message": "No session"},
+            status_code=200
+        )
+    
+    if not session.authenticated:
+        return JSONResponse(
+            content={"authenticated": False, "message": "Not authenticated"},
+            status_code=200
+        )
+    
+    # Check token expiry
+    if session.token_expiry and datetime.utcnow() >= session.token_expiry:
+        session.authenticated = False
+        return JSONResponse(
+            content={"authenticated": False, "message": "Token expired"},
+            status_code=200
+        )
+    
+    return JSONResponse(
+        content={
+            "authenticated": True,
+            "expires_at": session.token_expiry.isoformat() if session.token_expiry else None,
+            "access_token": session.access_token  # Include token for client to use
+        }
+    )
+
+@app.post("/auth/logout")
+async def auth_logout(
+    response: FastAPIResponse,
+    session_id: str = Cookie(None, alias="mcp_auth_session")
+):
+    """Logout and clear session"""
+    if session_id and session_id in auth_sessions:
+        del auth_sessions[session_id]
+    
+    response = JSONResponse(content={"message": "Logged out successfully"})
+    response.delete_cookie("mcp_auth_session")
+    return response
+
+@app.get("/")
+async def serve_client():
+    """Serve the OAuth test client HTML"""
+    import os
+    html_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "oauth-client.html")
+    if os.path.exists(html_path):
+        with open(html_path, "r") as f:
+            content = f.read()
+        return HTMLResponse(content=content)
+    else:
+        return HTMLResponse(content="<h1>OAuth client not found. Please create oauth-client.html</h1>")
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "sessions": len(sessions)}
+    return {
+        "status": "healthy",
+        "auth_sessions": len(auth_sessions),
+        "mcp_sessions": len(mcp_sessions)
+    }
+
+@app.get("/test")
+async def test_endpoint(request: Request):
+    """Test endpoint to verify request details"""
+    return {
+        "message": "Test endpoint working",
+        "headers": dict(request.headers),
+        "cookies": request.cookies,
+        "url": str(request.url)
+    }
 
 if __name__ == "__main__":
-    print("Starting Simplified MCP Server on http://0.0.0.0:8000", file=sys.stderr)
-    print("MCP endpoints:", file=sys.stderr)
+    print("Starting MCP Server with OAuth on http://0.0.0.0:8000", file=sys.stderr)
+    print("\nOAuth endpoints:", file=sys.stderr)
+    print("  - http://0.0.0.0:8000/auth/start    - Start OAuth flow", file=sys.stderr)
+    print("  - http://0.0.0.0:8000/auth/callback - OAuth callback", file=sys.stderr)
+    print("  - http://0.0.0.0:8000/auth/status   - Check auth status", file=sys.stderr)
+    print("  - http://0.0.0.0:8000/auth/logout   - Logout", file=sys.stderr)
+    print("\nMCP endpoints (protected):", file=sys.stderr)
     print("  - http://0.0.0.0:8000/r1", file=sys.stderr)
     print("  - http://0.0.0.0:8000/mcp", file=sys.stderr)
-    print("Health check: http://0.0.0.0:8000/health", file=sys.stderr)
+    print("\nOther endpoints:", file=sys.stderr)
+    print("  - http://0.0.0.0:8000/       - OAuth test client", file=sys.stderr)
+    print("  - http://0.0.0.0:8000/health - Health check", file=sys.stderr)
+    print("\n⚠️  Note: Update OAUTH_CONFIG with your client secret before running!", file=sys.stderr)
     uvicorn.run(app, host="0.0.0.0", port=8000)
