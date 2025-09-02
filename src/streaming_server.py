@@ -198,9 +198,6 @@ AVAILABLE_TOOLS = [
     )
 ]
 
-def create_sse_response(data: dict) -> str:
-    """Create SSE formatted response"""
-    return f"event: message\ndata: {json.dumps(data)}\n\n"
 
 def create_error_response(request_id: Optional[Union[str, int]], code: int, message: str) -> dict:
     """Create JSON-RPC error response"""
@@ -398,11 +395,11 @@ async def mcp_endpoint(
             rpc_request = JSONRPCRequest(**json_data)
             
         except Exception as e:
-            logger.error(f"Invalid JSON-RPC request: {e}")
-            error_resp = create_error_response(None, -32700, "Parse error")
+            logger.error(f"Invalid JSON-RPC request: {e}, params={params}, method={method}")
+            error_resp = create_error_response(None, -32700, f"Parse error: {str(e)}")
             return StreamingResponse(
-                iter([create_sse_response(error_resp)]),
-                media_type="text/event-stream",
+                iter([json.dumps(error_resp)]),
+                media_type="application/json",
                 headers={
                     "mcp-session-id": mcp_session_id,
                     "Cache-Control": "no-cache",
@@ -422,11 +419,10 @@ async def mcp_endpoint(
         else:
             response_data = create_error_response(rpc_request.id, -32601, f"Method not found: {rpc_request.method}")
         
-        # Return SSE response
-        sse_content = create_sse_response(response_data)
+        # Return JSON response with streaming
         return StreamingResponse(
-            iter([sse_content]),
-            media_type="text/event-stream",
+            iter([json.dumps(response_data)]),
+            media_type="application/json",
             headers={
                 "mcp-session-id": mcp_session_id,
                 "Cache-Control": "no-cache",
@@ -440,8 +436,8 @@ async def mcp_endpoint(
         logger.error(f"Server error: {e}")
         error_resp = create_error_response(None, -32603, "Internal error")
         return StreamingResponse(
-            iter([create_sse_response(error_resp)]),
-            media_type="text/event-stream"
+            iter([json.dumps(error_resp)]),
+            media_type="application/json"
         )
 
 @app.options("/r1")
@@ -452,7 +448,7 @@ async def r1_options():
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
+            "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id, Authorization",
             "Access-Control-Max-Age": "3600"
         }
     )
@@ -477,7 +473,7 @@ async def mcp_options():
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id",
+            "Access-Control-Allow-Headers": "Content-Type, Accept, mcp-session-id, Authorization",
             "Access-Control-Max-Age": "3600"
         }
     )
@@ -608,10 +604,64 @@ async def auth_callback(
             session.code_verifier = None
             session.state = None
             
-            # Return success HTML directly with token info
+            # Return success HTML directly with token info and MCP initialize button
             return HTMLResponse(content=f"""
                 <html>
-                    <head><title>Authentication Successful</title></head>
+                    <head>
+                        <title>Authentication Successful</title>
+                        <script>
+                            async function initializeMCP() {{
+                                const btn = document.getElementById('initBtn');
+                                const result = document.getElementById('initResult');
+                                
+                                btn.disabled = true;
+                                result.innerHTML = 'Initializing MCP session...';
+                                
+                                try {{
+                                    const params = {{
+                                        protocolVersion: "1.0.0",
+                                        capabilities: {{}},
+                                        clientInfo: {{
+                                            name: "oauth-client",
+                                            version: "1.0"
+                                        }}
+                                    }};
+                                    
+                                    const url = new URL('https://odhtce4qlvkvbgbg3nacivcyxq.apigateway.us-ashburn-1.oci.oc-test.com/mcp/r1');
+                                    url.searchParams.append('jsonrpc', '2.0');
+                                    url.searchParams.append('method', 'initialize');
+                                    url.searchParams.append('params', JSON.stringify(params));
+                                    url.searchParams.append('id', '1');
+                                    
+                                    const response = await fetch(url, {{
+                                        headers: {{
+                                            'Authorization': 'Bearer {session.access_token}'
+                                        }}
+                                    }});
+                                    
+                                    const sessionId = response.headers.get('mcp-session-id');
+                                    const data = await response.json();
+                                    
+                                    if (data.result) {{
+                                        result.innerHTML = `
+                                            <div style="background: #d4edda; padding: 15px; border-radius: 5px; margin-top: 10px;">
+                                                <strong>✅ MCP Session Initialized!</strong><br>
+                                                Session ID: ${{sessionId}}<br>
+                                                Protocol Version: ${{data.result.protocolVersion}}<br>
+                                                Server: ${{data.result.serverInfo.name}} v${{data.result.serverInfo.version}}
+                                            </div>
+                                        `;
+                                    }} else {{
+                                        result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px; margin-top: 10px;">Error: ${{JSON.stringify(data.error || data)}}</div>`;
+                                    }}
+                                }} catch (error) {{
+                                    result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px; margin-top: 10px;">Failed to initialize: ${{error.message}}</div>`;
+                                }} finally {{
+                                    btn.disabled = false;
+                                }}
+                            }}
+                        </script>
+                    </head>
                     <body style="font-family: sans-serif; padding: 50px; max-width: 800px; margin: 0 auto;">
                         <h1>✅ Authentication Successful!</h1>
                         <p>You have been successfully authenticated.</p>
@@ -620,6 +670,15 @@ async def auth_callback(
                             <h3>Your Access Token:</h3>
                             <textarea readonly style="width: 100%; height: 100px; font-family: monospace; font-size: 12px;">{session.access_token}</textarea>
                             <p><small>This token expires at: {session.token_expiry.isoformat() if session.token_expiry else 'Unknown'}</small></p>
+                        </div>
+                        
+                        <div style="background: #fff3cd; padding: 20px; border-radius: 5px; margin: 20px 0;">
+                            <h3>Initialize MCP Session</h3>
+                            <p>Click the button below to initialize an MCP session using your access token:</p>
+                            <button id="initBtn" onclick="initializeMCP()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
+                                Initialize MCP Session
+                            </button>
+                            <div id="initResult"></div>
                         </div>
                         
                         <div style="background: #e8f4f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
