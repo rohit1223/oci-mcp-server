@@ -13,7 +13,7 @@ import hashlib
 import base64
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlencode, parse_qs, unquote
+from urllib.parse import urlencode
 
 import uvicorn
 import httpx
@@ -467,39 +467,6 @@ async def mcp_endpoint_alt(
     params: Optional[str] = Query(None, description="Method parameters as JSON string")
 ):
     """MCP endpoint - Alternative path for API Gateway"""
-    # Handle double-encoded query parameters from API Gateway
-    query_str = str(request.url.query)
-    
-    # Check if we have a double-encoded query string (starts with ?jsonrpc)
-    if query_str.startswith("%3Fjsonrpc") or query_str.startswith("?jsonrpc"):
-        # Decode the query string
-        if query_str.startswith("%3F"):
-            query_str = unquote(query_str)
-        
-        # Remove leading ? if present
-        if query_str.startswith("?"):
-            query_str = query_str[1:]
-            
-        # Parse the actual parameters
-        parsed = parse_qs(query_str)
-        
-        # Extract parameters
-        jsonrpc = parsed.get('jsonrpc', [None])[0]
-        method = parsed.get('method', [None])[0]
-        id_val = parsed.get('id', [None])[0]
-        params_str = parsed.get('params', [None])[0]
-        
-        # Convert id to int if possible
-        if id_val is not None:
-            try:
-                id = int(id_val)
-            except (ValueError, TypeError):
-                id = id_val
-        else:
-            id = None
-            
-        params = params_str
-    
     return await mcp_endpoint(request, payload, jsonrpc, method, id, params)
 
 @app.options("/mcp")
@@ -665,8 +632,7 @@ async def auth_callback(
                         
                         <div style="margin-top: 30px;">
                             <a href="/mcp_no_auth/auth/status" style="display: inline-block; margin: 10px; padding: 10px 20px; background: #007bff; color: white; text-decoration: none; border-radius: 5px;">Check Auth Status</a>
-                            <br>
-                            <p>To access protected MCP endpoints, use the token above in your API calls.</p>
+                            <p>Use this token to access protected MCP endpoints.</p>
                         </div>
                     </body>
                 </html>
@@ -678,23 +644,6 @@ async def auth_callback(
         logger.error(f"Error in auth callback: {e}")
         raise HTTPException(status_code=500, detail="Authentication failed")
 
-@app.get("/auth/success")
-async def auth_success(session_id: str = Cookie(None, alias="mcp_auth_session")):
-    """Success page after authentication"""
-    session = get_auth_session(session_id) if session_id else None
-    if not session or not session.authenticated:
-        return JSONResponse(
-            content={"authenticated": False, "message": "Not authenticated"},
-            status_code=401
-        )
-    
-    return JSONResponse(
-        content={
-            "authenticated": True,
-            "message": "Successfully authenticated",
-            "expires_at": session.token_expiry.isoformat() if session.token_expiry else None
-        }
-    )
 
 @app.get("/auth/status")
 async def auth_status(session_id: str = Cookie(None, alias="mcp_auth_session")):
