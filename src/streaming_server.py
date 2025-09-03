@@ -610,6 +610,14 @@ async def auth_callback(
                     <head>
                         <title>Authentication Successful</title>
                         <script>
+                            // Get cookie value by name
+                            function getCookie(name) {{
+                                const value = `; ${{document.cookie}}`;
+                                const parts = value.split(`; ${{name}}=`);
+                                if (parts.length === 2) return parts.pop().split(';').shift();
+                                return null;
+                            }}
+                            
                             async function initializeMCP() {{
                                 const btn = document.getElementById('initBtn');
                                 const result = document.getElementById('initResult');
@@ -643,6 +651,11 @@ async def auth_callback(
                                     const data = await response.json();
                                     
                                     if (data.result) {{
+                                        // Store MCP session ID in cookie
+                                        if (sessionId) {{
+                                            document.cookie = `mcp_session_id=${{sessionId}}; path=/; max-age=3600; SameSite=None; Secure`;
+                                        }}
+                                        
                                         result.innerHTML = `
                                             <div style="background: #d4edda; padding: 15px; border-radius: 5px; margin-top: 10px;">
                                                 <strong>✅ MCP Session Initialized!</strong><br>
@@ -651,6 +664,9 @@ async def auth_callback(
                                                 Server: ${{data.result.serverInfo.name}} v${{data.result.serverInfo.version}}
                                             </div>
                                         `;
+                                        
+                                        // Show the tool buttons now that we have a session
+                                        document.getElementById('toolButtons').style.display = 'block';
                                     }} else {{
                                         result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px; margin-top: 10px;">Error: ${{JSON.stringify(data.error || data)}}</div>`;
                                     }}
@@ -658,6 +674,104 @@ async def auth_callback(
                                     result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px; margin-top: 10px;">Failed to initialize: ${{error.message}}</div>`;
                                 }} finally {{
                                     btn.disabled = false;
+                                }}
+                            }}
+                            
+                            async function callMCPTool(toolName, args = {{}}) {{
+                                const result = document.getElementById('toolResult');
+                                const mcp_session_id = getCookie('mcp_session_id');
+                                
+                                if (!mcp_session_id) {{
+                                    result.innerHTML = '<div style="background: #f8d7da; padding: 15px; border-radius: 5px;">Please initialize MCP session first!</div>';
+                                    return;
+                                }}
+                                
+                                result.innerHTML = 'Calling tool...';
+                                
+                                try {{
+                                    const params = {{
+                                        name: toolName,
+                                        arguments: args
+                                    }};
+                                    
+                                    const url = new URL('https://odhtce4qlvkvbgbg3nacivcyxq.apigateway.us-ashburn-1.oci.oc-test.com/mcp/r1');
+                                    url.searchParams.append('jsonrpc', '2.0');
+                                    url.searchParams.append('method', 'tools/call');
+                                    url.searchParams.append('params', JSON.stringify(params));
+                                    url.searchParams.append('id', Date.now().toString());
+                                    url.searchParams.append('session_id', mcp_session_id);
+                                    
+                                    const response = await fetch(url, {{
+                                        headers: {{
+                                            'Authorization': 'Bearer {session.access_token}',
+                                            'mcp-session-id': mcp_session_id
+                                        }}
+                                    }});
+                                    
+                                    const data = await response.json();
+                                    
+                                    if (data.result) {{
+                                        const content = data.result.content[0].text;
+                                        result.innerHTML = `
+                                            <div style="background: #d4edda; padding: 15px; border-radius: 5px;">
+                                                <strong>✅ Tool Result:</strong>
+                                                <pre style="overflow-x: auto; background: white; padding: 10px; border-radius: 3px; margin-top: 10px;">${{content}}</pre>
+                                            </div>
+                                        `;
+                                    }} else {{
+                                        result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px;">Error: ${{JSON.stringify(data.error || data)}}</div>`;
+                                    }}
+                                }} catch (error) {{
+                                    result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px;">Failed to call tool: ${{error.message}}</div>`;
+                                }}
+                            }}
+                            
+                            async function getDummyGateways() {{
+                                await callMCPTool('get_dummy_gateways_tool');
+                            }}
+                            
+                            async function listTools() {{
+                                const result = document.getElementById('toolResult');
+                                const mcp_session_id = getCookie('mcp_session_id');
+                                
+                                if (!mcp_session_id) {{
+                                    result.innerHTML = '<div style="background: #f8d7da; padding: 15px; border-radius: 5px;">Please initialize MCP session first!</div>';
+                                    return;
+                                }}
+                                
+                                result.innerHTML = 'Fetching available tools...';
+                                
+                                try {{
+                                    const url = new URL('https://odhtce4qlvkvbgbg3nacivcyxq.apigateway.us-ashburn-1.oci.oc-test.com/mcp/r1');
+                                    url.searchParams.append('jsonrpc', '2.0');
+                                    url.searchParams.append('method', 'tools/list');
+                                    url.searchParams.append('id', Date.now().toString());
+                                    url.searchParams.append('session_id', mcp_session_id);
+                                    
+                                    const response = await fetch(url, {{
+                                        headers: {{
+                                            'Authorization': 'Bearer {session.access_token}',
+                                            'mcp-session-id': mcp_session_id
+                                        }}
+                                    }});
+                                    
+                                    const data = await response.json();
+                                    
+                                    if (data.result) {{
+                                        const tools = data.result.tools;
+                                        result.innerHTML = `
+                                            <div style="background: #d4edda; padding: 15px; border-radius: 5px;">
+                                                <strong>✅ Available Tools:</strong>
+                                                <ul style="margin-top: 10px;">
+                                                    ${{tools.map(tool => `<li><strong>${{tool.name}}</strong>: ${{tool.description}}</li>`).join('')}}
+                                                </ul>
+                                            </div>
+                                        `;
+                                    }} else {{
+                                        result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px;">Error: ${{JSON.stringify(data.error || data)}}</div>`;
+                                    }}
+                                }} catch (error) {{
+                                    result.innerHTML = `<div style="background: #f8d7da; padding: 15px; border-radius: 5px;">Failed to list tools: ${{error.message}}</div>`;
                                 }}
                             }}
                         </script>
@@ -679,6 +793,18 @@ async def auth_callback(
                                 Initialize MCP Session
                             </button>
                             <div id="initResult"></div>
+                        </div>
+                        
+                        <div id="toolButtons" style="background: #e7f3ff; padding: 20px; border-radius: 5px; margin: 20px 0; display: none;">
+                            <h3>MCP Tools</h3>
+                            <p>Use these tools to interact with the MCP server:</p>
+                            <button onclick="listTools()" style="padding: 10px 20px; background: #17a2b8; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; margin: 5px;">
+                                List Available Tools
+                            </button>
+                            <button onclick="getDummyGateways()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; margin: 5px;">
+                                Get Dummy Gateways
+                            </button>
+                            <div id="toolResult" style="margin-top: 15px;"></div>
                         </div>
                         
                         <div style="background: #e8f4f8; padding: 20px; border-radius: 5px; margin: 20px 0;">
