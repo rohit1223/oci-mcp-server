@@ -921,4 +921,14 @@ if __name__ == "__main__":
     print("  - http://0.0.0.0:8000/       - OAuth test client", file=sys.stderr)
     print("  - http://0.0.0.0:8000/health - Health check", file=sys.stderr)
     print("\n⚠️  Note: Update OAUTH_CONFIG with your client secret before running!", file=sys.stderr)
+    # For HTTP/2 run this with TLS and enable HTTP/2 by http="h2"
+    # Example:
+    # uvicorn.run(
+    #   app,
+    #   host="0.0.0.0",
+    #   port=8000,
+    #   ssl_keyfile="path/to/key.pem",     # HTTP/2 requires TLS
+    #   ssl_certfile="path/to/cert.pem",   # HTTP/2 requires TLS
+    #   http="h2"                          # Enable HTTP/2
+    #   )
     uvicorn.run(app, host="0.0.0.0", port=8000)
