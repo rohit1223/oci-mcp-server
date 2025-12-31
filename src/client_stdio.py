@@ -9,8 +9,8 @@ nest_asyncio.apply()  # For interactive environments
 async def main():
     # Define server parameters
     server_params = StdioServerParameters(
-        command="python",  # The command to run your server
-        args=["server.py"],  # Arguments to the command
+        command="/Users/kukuro/personal/personalGit/oci-mcp-server/.venv/bin/python",  # The command to run your server
+        args=["/Users/kukuro/personal/personalGit/oci-mcp-server/src/server.py"],  # Arguments to the command
     )
 
     # Connect to the server

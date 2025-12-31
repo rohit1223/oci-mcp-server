@@ -1,8 +1,8 @@
 # config.py
 # ------------
 PROFILE_NAME = 'DEFAULT'
-REGION = 'ap-mumbai-1'
-SERVICE_ENDPOINT = 'https://apigateway-integ.ap-mumbai-1.oci.oraclecloud.com/20190501'
+REGION = 'us-ashburn-1'
+SERVICE_ENDPOINT = 'https://apigateway-integ.us-ashburn-1.oci.oc-test.com/20190501'
 COMPARTMENT_ID = (
     # 'ocid1.compartment.oc1..aaaaaaaafyrpssegzlvxazrz7ieqe3j3mtbvluueppcb6ss4p6mq2w3vunxq'
     # 'ocid1.compartment.oc1..aaaaaaaajvqp2idt5qgd6djjhjmtxhmvau4pczm5ugiqt3ev2hbodnftu7ca'

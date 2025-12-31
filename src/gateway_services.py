@@ -32,6 +32,27 @@ def list_gateways(compartment_id: str) -> list:
     except Exception as e:
         logging.error("Failed to list gateways", exc_info=True)
         raise e
+    
+# Return hardcode json
+def get_dumy_gateways_json():
+    """
+    Returns a hardcoded JSON response for the gateways list.
+    This is used to test the gateway list endpoint without making actual API calls.
+    
+    Returns:
+        dict: A dictionary containing the gateway list data.
+    """
+    return {
+        "gateways": [
+            {
+                "status": "Successful OIDC flow",
+                "name": "test-oidc-gateway-flow"
+            }
+        ]
+    }
+
+# Deploy in paul's instance
+# setup http backend in aj's gw
 
 def get_gateway(gateway_id: str) -> dict:
     """
